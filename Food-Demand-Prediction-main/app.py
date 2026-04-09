@@ -1,19 +1,9 @@
-# =========================
-# IMPORT LIBRARIES
-# =========================
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from tensorflow.keras.models import load_model
 import joblib
-
-# =========================
-# LOAD MODEL + SCALER
-# =========================
-model = load_model("gru_model_food_type.h5", compile=False)
-scaler = joblib.load("scaler.pkl")
 
 # =========================
 # PAGE CONFIG
@@ -21,269 +11,326 @@ scaler = joblib.load("scaler.pkl")
 st.set_page_config(page_title="Food Demand Dashboard", layout="wide")
 
 # =========================
-# THEME TOGGLE
+# THEME
 # =========================
 theme = st.sidebar.radio("🌗 Theme", ["Dark", "Light"])
 
 if theme == "Dark":
-    bg_color = "#0E1117"
-    text_color = "white"
-    card_color = "#1c1f26"
+    bg_color = "#0B0F19"
+    text_color = "#E6EAF2"
 else:
-    bg_color = "white"
-    text_color = "black"
-    card_color = "#f0f2f6"
+    bg_color = "#FFFFFF"
+    text_color = "#111111"
 
-chart_height = 520
-chart_margin = dict(l=60, r=60, t=70, b=60)
+st.markdown(f"""
+<style>
+.stApp {{
+background-color:{bg_color};
+color:{text_color};
+}}
+</style>
+""", unsafe_allow_html=True)
 
 # =========================
-# TITLE
+# NAVIGATION
 # =========================
-st.markdown(
-    f"<h1 style='color:{text_color};'>🍽️ Food Demand Dashboard</h1>",
-    unsafe_allow_html=True
+page = st.sidebar.selectbox(
+"📌 Navigate",
+["Dashboard","Prediction","Analytics","Brand Signup"]
 )
 
 # =========================
 # LOAD DATA
 # =========================
-data = pd.read_csv("train.csv")
+@st.cache_data
+def load_data():
 
-np.random.seed(42)
+    data = pd.read_csv("train.csv")
 
-if "city" not in data.columns:
-    data["city"] = np.random.choice(["Delhi", "Mumbai", "Bangalore"], len(data))
+    data = data.sort_values(by="week")
 
-if "food_type" not in data.columns:
-    data["food_type"] = np.random.choice(["Veg", "Non-Veg", "Vegan"], len(data))
+    data["price_diff"] = data["base_price"] - data["checkout_price"]
 
-# =========================
-# SESSION STATE
-# =========================
-if "data_store" not in st.session_state:
-    st.session_state.data_store = data.copy()
+    # Map center_id → Indian cities
+    city_map = {
+    10:"Delhi",
+    11:"Mumbai",
+    12:"Bangalore",
+    13:"Hyderabad",
+    14:"Chennai",
+    15:"Kolkata",
+    16:"Pune",
+    17:"Ahmedabad",
+    18:"Jaipur",
+    19:"Lucknow",
+    20:"Chandigarh",
+    21:"Indore"
+    }
+
+    data["city"] = data["center_id"].map(city_map)
+
+    # Food categories
+    np.random.seed(42)
+
+    data["food_category"] = np.random.choice(
+    ["Veg","Non-Veg","Vegan"],
+    size=len(data)
+    )
+
+    return data
+
+data = load_data()
 
 # =========================
 # SIDEBAR FILTERS
 # =========================
-st.sidebar.header("🔍 Filters")
-
-city = st.sidebar.selectbox(
-    "City",
-    st.session_state.data_store["city"].unique()
+food_category = st.sidebar.selectbox(
+"🍽 Food Category",
+["All","Veg","Non-Veg","Vegan"]
 )
 
-food = st.sidebar.selectbox(
-    "Food Type",
-    ["All"] + list(st.session_state.data_store["food_type"].unique())
+city = st.sidebar.selectbox(
+"🏙 City",
+["All"] + sorted(data["city"].dropna().unique())
 )
 
 # =========================
 # FILTER DATA
 # =========================
-if food == "All":
-    filtered = st.session_state.data_store[
-        st.session_state.data_store["city"] == city
-    ]
-else:
-    filtered = st.session_state.data_store[
-        (st.session_state.data_store["city"] == city) &
-        (st.session_state.data_store["food_type"] == food)
+filtered_data = data.copy()
+
+if food_category != "All":
+    filtered_data = filtered_data[
+    filtered_data["food_category"] == food_category
     ]
 
-filtered = filtered.copy()
-filtered["price_diff"] = filtered["base_price"] - filtered["checkout_price"]
+if city != "All":
+    filtered_data = filtered_data[
+    filtered_data["city"] == city
+    ]
 
 # =========================
-# KPI CARDS
+# LOAD MODEL
 # =========================
-col1, col2, col3 = st.columns(3)
-
-def kpi(title, value):
-    st.markdown(f"""
-    <div style="
-        background:{card_color};
-        padding:20px;
-        border-radius:10px;
-        text-align:center;
-        color:{text_color}">
-        <h4>{title}</h4>
-        <h2>{value}</h2>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col1:
-    kpi("📦 Total Orders", int(filtered["num_orders"].sum()))
-
-with col2:
-    kpi("📈 Avg Orders", int(filtered["num_orders"].mean()))
-
-with col3:
-    kpi("💰 Avg Price", int(filtered["checkout_price"].mean()))
+model = load_model("gru_model.h5",compile=False)
+scaler = joblib.load("scaler.pkl")
 
 # =========================
-# TABS
+# DASHBOARD PAGE
 # =========================
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["📉 Line Chart", "📊 Bar Chart", "🥧 Pie Chart", "📄 Data"]
-)
+if page == "Dashboard":
 
-# =========================
-# LINE CHART
-# =========================
-with tab1:
+    st.title("📊 Food Demand Dashboard")
 
-    plot_data = filtered.copy().reset_index()
+    col1,col2 = st.columns(2)
 
-    # Reduce noise
-    plot_data["group"] = plot_data.index // 1500
-    clean_data = plot_data.groupby("group")["num_orders"].mean().reset_index()
+    col1.metric(
+    "Total Orders",
+    int(filtered_data["num_orders"].sum())
+    )
 
-    # Smooth actual data
-    clean_data["actual_smooth"] = clean_data["num_orders"].rolling(
-        window=3, center=True, min_periods=1
-    ).mean()
+    col2.metric(
+    "Average Orders",
+    int(filtered_data["num_orders"].mean())
+    )
 
-    # Predicted line (shifted comparison)
-    clean_data["predicted"] = clean_data["actual_smooth"].shift(-1)
-    clean_data["predicted"] = clean_data["predicted"].fillna(clean_data["actual_smooth"])
+    # DEMAND TREND
+    st.subheader("📈 Demand Trend")
 
     fig = go.Figure()
 
     fig.add_trace(go.Scatter(
-        x=clean_data["group"] * 1500,
-        y=clean_data["actual_smooth"],
-        mode="lines",
-        name="Actual Orders",
-        line=dict(color="#F5F5F5", width=2, shape="spline")
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=clean_data["group"] * 1500,
-        y=clean_data["predicted"],
-        mode="lines",
-        name="Predicted Orders",
-        line=dict(color="#F6E27F", width=2, shape="spline")
+    y=filtered_data["num_orders"],
+    mode="lines",
+    name="Orders"
     ))
 
     fig.update_layout(
-        title=f"📈 Orders Over Time — {city} ({food})",
-        xaxis_title="Time",
-        yaxis_title="Orders",
-        height=chart_height,
-        margin=chart_margin,
-        plot_bgcolor=bg_color,
-        paper_bgcolor=bg_color,
-        font=dict(color=text_color),
-        xaxis=dict(showgrid=True, gridcolor="rgba(200,200,200,0.18)"),
-        yaxis=dict(showgrid=True, gridcolor="rgba(200,200,200,0.18)"),
-        legend=dict(orientation="h", y=1.05, x=1, xanchor="right"),
-        hovermode="x unified"
+    height=300,
+    plot_bgcolor=bg_color,
+    paper_bgcolor=bg_color,
+    font=dict(color=text_color)
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig,use_container_width=True)
 
-# =========================
-# BAR CHART
-# =========================
-with tab2:
+    # DEMAND BY CITY
+    st.subheader("🏙 Demand by City")
 
-    bar_fig = px.bar(
-        filtered.head(20),
-        x="meal_id" if "meal_id" in filtered.columns else filtered.index,
-        y="num_orders",
-        color="food_type",
-        title="Orders by Meal"
+    city_orders = filtered_data.groupby("city")["num_orders"].sum()
+
+    fig2 = go.Figure()
+
+    fig2.add_trace(go.Bar(
+    x=city_orders.index,
+    y=city_orders.values
+    ))
+
+    fig2.update_layout(
+    plot_bgcolor=bg_color,
+    paper_bgcolor=bg_color,
+    font=dict(color=text_color)
     )
 
-    bar_fig.update_layout(
-        height=chart_height,
-        margin=chart_margin,
+    st.plotly_chart(fig2,use_container_width=True)
+
+    # CATEGORY PIE
+    st.subheader("🍽 Category Distribution")
+
+    cat_orders = filtered_data.groupby("food_category")["num_orders"].sum()
+
+    pie = go.Figure(data=[go.Pie(
+    labels=cat_orders.index,
+    values=cat_orders.values
+    )])
+
+    pie.update_layout(
+    plot_bgcolor=bg_color,
+    paper_bgcolor=bg_color,
+    font=dict(color=text_color)
+    )
+
+    st.plotly_chart(pie,use_container_width=True)
+
+# =========================
+# PREDICTION PAGE
+# =========================
+elif page == "Prediction":
+
+    st.title("🔮 Predict Demand")
+
+    food_type = st.selectbox(
+    "Food Category",
+    ["Veg","Non-Veg","Vegan"]
+    )
+
+    price = st.slider(
+    "Checkout Price",
+    100,500,200
+    )
+
+    base = st.slider(
+    "Base Price",
+    100,600,250
+    )
+
+    if st.button("Predict"):
+
+        price_diff = base - price
+
+        inp = np.array([[100,price,price_diff]])
+
+        inp = scaler.transform(inp)
+
+        inp = inp.reshape(1,1,3)
+
+        pred = model.predict(inp,verbose=0)
+
+        prediction = int(pred[0][0]*1000)
+
+        st.success(f"Predicted {food_type} Orders: {prediction}")
+
+        labels = ["Predicted","Remaining"]
+
+        values = [prediction,max(1000-prediction,0)]
+
+        pie = go.Figure(data=[go.Pie(labels=labels,values=values)])
+
+        pie.update_layout(
         plot_bgcolor=bg_color,
         paper_bgcolor=bg_color,
         font=dict(color=text_color)
+        )
+
+        st.plotly_chart(pie,use_container_width=True)
+
+# =========================
+# ANALYTICS PAGE
+# =========================
+elif page == "Analytics":
+
+    st.title("📊 Analytics")
+
+    st.subheader("Actual vs Predicted")
+
+    sample = filtered_data[
+    ["num_orders","checkout_price","price_diff"]
+    ].head(100)
+
+    scaled = scaler.transform(sample)
+
+    X_test = scaled.reshape(len(scaled),1,3)
+
+    preds = model.predict(X_test,verbose=0)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+    y=sample["num_orders"],
+    mode="lines",
+    name="Actual"
+    ))
+
+    fig.add_trace(go.Scatter(
+    y=preds.flatten()*1000,
+    mode="lines",
+    name="Predicted"
+    ))
+
+    fig.update_layout(
+    height=350,
+    plot_bgcolor=bg_color,
+    paper_bgcolor=bg_color,
+    font=dict(color=text_color)
     )
 
-    st.plotly_chart(bar_fig, use_container_width=True)
+    st.plotly_chart(fig,use_container_width=True)
 
 # =========================
-# PIE CHART
+# BRAND SIGNUP PAGE
 # =========================
-with tab3:
+elif page == "Brand Signup":
 
-    pie_data = filtered["food_type"].value_counts().reset_index()
-    pie_data.columns = ["Food Type", "Count"]
+    st.title("🏪 Brand Partnership Signup")
 
-    pie_fig = px.pie(
-        pie_data,
-        names="Food Type",
-        values="Count",
-        title="Food Distribution"
-    )
+    st.write("Brands can register to join the food demand prediction platform.")
 
-    pie_fig.update_layout(
-        height=chart_height,
-        margin=chart_margin,
-        plot_bgcolor=bg_color,
-        paper_bgcolor=bg_color,
-        font=dict(color=text_color)
-    )
+    with st.form("brand_signup"):
 
-    st.plotly_chart(pie_fig, use_container_width=True)
+        brand = st.text_input("Brand Name")
 
-# =========================
-# DATA TABLE
-# =========================
-with tab4:
-    st.dataframe(filtered.tail(50))
+        email = st.text_input("Business Email")
 
-# =========================
-# PREDICTION INPUT
-# =========================
-st.sidebar.header("🤖 Predict New Demand")
+        city_choice = st.selectbox(
+        "City",
+        sorted(data["city"].dropna().unique())
+        )
 
-checkout_price = st.sidebar.slider("Checkout Price", 50, 2000, 500)
-base_price = st.sidebar.slider("Base Price", 50, 2000, 700)
+        category = st.selectbox(
+        "Food Category",
+        ["Veg","Non-Veg","Vegan"]
+        )
 
-price_diff = base_price - checkout_price
+        contact = st.text_input("Contact Number")
 
-if st.sidebar.button("Predict"):
+        submit = st.form_submit_button("Submit")
 
-    food_type_for_pred = food if food != "All" else "Veg"
+        if submit:
 
-    inp = np.array([[0, checkout_price, base_price, price_diff, 0]])
+            new_entry = pd.DataFrame({
+            "Brand":[brand],
+            "Email":[email],
+            "City":[city_choice],
+            "Category":[category],
+            "Contact":[contact]
+            })
 
-    inp_scaled = scaler.transform(inp)
-    inp_scaled = inp_scaled.reshape((1, 1, 5))
+            try:
+                existing = pd.read_csv("brand_signups.csv")
+                updated = pd.concat([existing,new_entry],ignore_index=True)
+            except:
+                updated = new_entry
 
-    pred = model.predict(inp_scaled)
+            updated.to_csv("brand_signups.csv",index=False)
 
-    temp = np.zeros((1, 5))
-    temp[0, 0] = pred[0][0]
-
-    result = scaler.inverse_transform(temp)[0][0]
-
-    st.success(f"📊 Predicted Orders ({food_type_for_pred}): {int(result)}")
-
-    new_row = {
-        "num_orders": int(result),
-        "checkout_price": checkout_price,
-        "base_price": base_price,
-        "meal_id": np.random.randint(1000, 2000),
-        "city": city,
-        "food_type": food_type_for_pred
-    }
-
-    st.session_state.data_store = pd.concat(
-        [st.session_state.data_store, pd.DataFrame([new_row])],
-        ignore_index=True
-    )
-
-    st.rerun()
-
-# =========================
-# FOOTER
-# =========================
-st.markdown("---")
-st.markdown("🚀 Built with Streamlit + GRU Model")
+            st.success("✅ Signup Successful! Our team will contact you soon.")
